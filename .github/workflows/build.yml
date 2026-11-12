@@ -1,0 +1,70 @@
+name: Build Roshan.io
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux x86_64 release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 libvulkan-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libxkbcommon-dev xorg-dev
+
+      - name: Install Premake5
+        run: |
+          curl -sSL https://github.com/premake/premake-core/releases/download/v5.0.0-beta7/premake-5.0.0-beta7-linux.tar.gz | tar xz
+          sudo mv premake5 /usr/local/bin/
+
+      - name: Install Slang shader compiler
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download -R shader-slang/slang --pattern 'slang-*-linux-x86_64.tar.gz' --output slang.tar.gz
+          mkdir slang && tar xzf slang.tar.gz -C slang
+          echo "$PWD/slang/bin" >> "$GITHUB_PATH"
+
+      - name: Compile shaders
+        run: python3 build.py 2
+
+      - name: Generate makefiles and build (release)
+        env:
+          VULKAN_SDK: /usr
+        run: |
+          premake5 --file=project.lua gmake
+          make -C build/makefiles config=release_linux -j"$(nproc)"
+
+      - name: Package
+        run: |
+          mkdir -p dist/Roshan.io
+          cp build/bin/linux_x86_64_release/app dist/Roshan.io/Roshan.io
+          cp -r app/res dist/Roshan.io/app-res-tmp
+          mkdir -p dist/Roshan.io/app && mv dist/Roshan.io/app-res-tmp dist/Roshan.io/app/res
+          cp LICENSE README.md dist/Roshan.io/
+          printf '#!/bin/sh\ncd "$(dirname "$0")" && exec ./Roshan.io "$@"\n' > dist/Roshan.io/run.sh
+          chmod +x dist/Roshan.io/run.sh dist/Roshan.io/Roshan.io
+          cd dist && zip -r ../Roshan.io-linux-x86_64.zip Roshan.io
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Roshan.io-linux-x86_64
+          path: Roshan.io-linux-x86_64.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Roshan.io-linux-x86_64.zip
